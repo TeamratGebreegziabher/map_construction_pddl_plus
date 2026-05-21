@@ -1,0 +1,12 @@
+osmnx
+networkx
+pandas
+matplotlib
+pyyaml
+geopandas
+shapely
+folium
+pytest
+streamlit
+streamlit-folium
+shapely

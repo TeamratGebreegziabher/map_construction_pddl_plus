@@ -1,0 +1,6 @@
+data/
+report/
+outputs/
+.venv/
+config.yaml
+*.log
