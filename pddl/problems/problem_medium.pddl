@@ -12,6 +12,7 @@
 
   (:init
     (at car1 loc_6)
+    (visited loc_6)
 
     (= (battery car1) 100)
     (= (speed car1) 10)

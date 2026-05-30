@@ -13,9 +13,6 @@ from map_extractor import ensure_directory, slugify_place_name
 
 
 def load_raw_graph(config: dict[str, Any]) -> nx.MultiDiGraph:
-    """
-    Load the raw OSMnx graph saved during Stage Two.
-    """
     place_name = config["map"]["place_name"]
     safe_name = slugify_place_name(place_name)
 
@@ -40,12 +37,8 @@ def load_raw_graph(config: dict[str, Any]) -> nx.MultiDiGraph:
 
 
 def to_float(value: Any, default: float = 0.0) -> float:
-    """
-    Convert OSMnx/GraphML attribute values to float safely.
-    """
     if value is None:
         return default
-
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -53,36 +46,18 @@ def to_float(value: Any, default: float = 0.0) -> float:
 
 
 def normalize_edge_lengths(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
-    """
-    Ensure all edge lengths are numeric floats.
-    Edges without usable length receive a fallback value.
-    """
     fallback_length = 1.0
-
     for _, _, _, data in graph.edges(keys=True, data=True):
         length = to_float(data.get("length"), fallback_length)
-
         if length <= 0:
             length = fallback_length
-
         data["length"] = length
-
     return graph
 
 
 def keep_largest_strongly_connected_component(
     graph: nx.MultiDiGraph,
 ) -> nx.MultiDiGraph:
-    """
-    Keep the largest strongly connected component.
-
-    Strong connectivity is useful because, in a directed road network,
-    it ensures that selected nodes can reach each other by following
-    directed edges.
-
-    If the graph is too fragmented, we fall back to the largest weakly
-    connected component.
-    """
     if graph.number_of_nodes() == 0:
         raise ValueError("The graph has no nodes.")
 
@@ -111,7 +86,6 @@ def keep_largest_strongly_connected_component(
             f"{subgraph.number_of_nodes()} nodes, "
             f"{subgraph.number_of_edges()} edges"
         )
-
         return subgraph
 
     components = list(nx.connected_components(graph))
@@ -123,29 +97,16 @@ def keep_largest_strongly_connected_component(
         f"{subgraph.number_of_nodes()} nodes, "
         f"{subgraph.number_of_edges()} edges"
     )
-
     return subgraph
 
 
 def choose_seed_node(graph: nx.MultiDiGraph) -> Any:
-    """
-    Choose a central-ish seed node.
-
-    We use the node with the highest degree because it is likely to be
-    near a denser part of the road network.
-    """
     if graph.number_of_nodes() == 0:
         raise ValueError("Cannot choose seed node from an empty graph.")
-
     return max(graph.nodes, key=lambda node: graph.degree(node))
 
 
 def bfs_node_sample(graph: nx.MultiDiGraph, max_nodes: int) -> list[Any]:
-    """
-    Select up to max_nodes nodes using BFS from a seed node.
-
-    We run BFS on the undirected version to obtain a compact local subgraph.
-    """
     if max_nodes <= 0:
         raise ValueError("max_nodes must be positive.")
 
@@ -179,13 +140,9 @@ def create_instance_subgraph(
     graph: nx.MultiDiGraph,
     max_nodes: int,
 ) -> nx.MultiDiGraph:
-    """
-    Create a smaller subgraph with at most max_nodes nodes.
-    """
     selected_nodes = bfs_node_sample(graph, max_nodes=max_nodes)
     subgraph = graph.subgraph(selected_nodes).copy()
 
-    # Remove isolated nodes, if any appeared after induced subgraph creation.
     isolated_nodes = list(nx.isolates(subgraph.to_undirected()))
     if isolated_nodes:
         subgraph.remove_nodes_from(isolated_nodes)
@@ -194,18 +151,10 @@ def create_instance_subgraph(
         f"Created subgraph with target max_nodes={max_nodes}: "
         f"{subgraph.number_of_nodes()} nodes, {subgraph.number_of_edges()} edges"
     )
-
     return subgraph
 
 
 def build_simple_digraph(graph: nx.MultiDiGraph) -> nx.DiGraph:
-    """
-    Convert MultiDiGraph to DiGraph by keeping the shortest edge
-    between each ordered pair of nodes.
-
-    This is useful for shortest-path calculations and for selecting
-    start/goal pairs.
-    """
     simple_graph = nx.DiGraph()
 
     for node, data in graph.nodes(data=True):
@@ -218,8 +167,7 @@ def build_simple_digraph(graph: nx.MultiDiGraph) -> nx.DiGraph:
             continue
 
         if simple_graph.has_edge(u, v):
-            existing_length = simple_graph[u][v]["length"]
-            if length < existing_length:
+            if length < simple_graph[u][v]["length"]:
                 simple_graph[u][v]["length"] = length
         else:
             simple_graph.add_edge(u, v, length=length)
@@ -228,12 +176,6 @@ def build_simple_digraph(graph: nx.MultiDiGraph) -> nx.DiGraph:
 
 
 def choose_start_goal(graph: nx.MultiDiGraph) -> tuple[Any, Any, float]:
-    """
-    Choose a start and goal pair with a non-trivial shortest-path distance.
-
-    We search for the reachable pair with the largest shortest-path distance
-    inside the selected subgraph.
-    """
     simple_graph = build_simple_digraph(graph)
 
     best_start = None
@@ -250,7 +192,6 @@ def choose_start_goal(graph: nx.MultiDiGraph) -> tuple[Any, Any, float]:
         for target, distance in lengths.items():
             if source == target:
                 continue
-
             if distance > best_distance:
                 best_start = source
                 best_goal = target
@@ -265,20 +206,51 @@ def choose_start_goal(graph: nx.MultiDiGraph) -> tuple[Any, Any, float]:
         f"Selected start-goal pair with approximate shortest distance "
         f"{best_distance:.2f} meters"
     )
-
     return best_start, best_goal, best_distance
 
 
 def create_pddl_location_mapping(graph: nx.MultiDiGraph) -> dict[Any, str]:
-    """
-    Rename OSM node IDs to PDDL-safe location names.
-    """
     mapping = {}
-
     for index, node in enumerate(graph.nodes):
         mapping[node] = f"loc_{index}"
-
     return mapping
+
+
+def _detect_traffic_signal(node_data: dict[str, Any]) -> bool:
+    """
+    Return True if this OSM node is tagged as a traffic signal.
+
+    OSMnx stores the raw OSM tag highway=traffic_signals on the node.
+    This tag is present for any location, city, or country worldwide —
+    it is not specific to Rende or Italy.
+
+    We also check the older/alternative tag traffic_signals=signal
+    as a fallback for some regional OSM mapping conventions.
+    """
+    highway_tag = str(node_data.get("highway", "")).strip().lower()
+    traffic_tag = str(node_data.get("traffic_signals", "")).strip().lower()
+
+    return highway_tag == "traffic_signals" or traffic_tag in (
+        "signal",
+        "traffic_signals",
+    )
+
+
+def _detect_charging_station(node_data: dict[str, Any]) -> bool:
+    """
+    Return True if this OSM node is tagged as an EV charging station.
+
+    OSMnx stores amenity=charging_station on the node.
+    This is the standard OSM tag used worldwide for EV chargers,
+    regardless of location.
+
+    We also check the power tag as some mappers use
+    power=charging_station as an alternative.
+    """
+    amenity_tag = str(node_data.get("amenity", "")).strip().lower()
+    power_tag = str(node_data.get("power", "")).strip().lower()
+
+    return amenity_tag == "charging_station" or power_tag == "charging_station"
 
 
 def extract_locations(
@@ -286,15 +258,35 @@ def extract_locations(
     mapping: dict[Any, str],
 ) -> list[dict[str, Any]]:
     """
-    Extract location objects with coordinates.
+    Extract location objects with coordinates and OSM feature tags.
+
+    For every node in the subgraph, we read the OSMnx node attributes
+    and extract:
+      - Coordinates (lat/lon)
+      - Whether the node is a traffic signal intersection
+      - Whether the node has an EV charging station
+
+    These flags work for any city or country because they rely on
+    standard OSM tags (highway=traffic_signals, amenity=charging_station)
+    that mappers use worldwide.
     """
     locations = []
 
     for original_id, pddl_id in mapping.items():
-        data = graph.nodes[original_id]
+        node_data = graph.nodes[original_id]
 
-        lon = to_float(data.get("x"), default=0.0)
-        lat = to_float(data.get("y"), default=0.0)
+        lon = to_float(node_data.get("x"), default=0.0)
+        lat = to_float(node_data.get("y"), default=0.0)
+
+        # --- Traffic signal detection ---
+        # highway=traffic_signals is the primary OSM tag.
+        # Works for any mapped city worldwide.
+        has_traffic_signal = _detect_traffic_signal(node_data)
+
+        # --- Charging station detection ---
+        # amenity=charging_station is the primary OSM tag.
+        # Works for any mapped city worldwide.
+        has_charging_station = _detect_charging_station(node_data)
 
         locations.append(
             {
@@ -302,6 +294,12 @@ def extract_locations(
                 "osm_id": str(original_id),
                 "lat": lat,
                 "lon": lon,
+                # Raw OSM tags preserved for debugging and SUMO export
+                "osm_highway_tag": str(node_data.get("highway", "")),
+                "osm_amenity_tag": str(node_data.get("amenity", "")),
+                # Derived boolean flags used by pddl_generator.py
+                "has_traffic_signal": has_traffic_signal,
+                "has_charging_station": has_charging_station,
             }
         )
 
@@ -346,6 +344,7 @@ def extract_edges(
             "travel_time_s": round(travel_time_s, 3),
             "name": str(data.get("name", "")),
             "highway": str(data.get("highway", "")),
+            "oneway": bool(data.get("oneway", False)),
         }
 
         if key not in best_edges:
@@ -361,19 +360,14 @@ def save_instance_json(
     instance: dict[str, Any],
     config: dict[str, Any],
 ) -> Path:
-    """
-    Save processed instance as JSON.
-    """
     processed_data_dir = ensure_directory(config["outputs"]["processed_data_dir"])
     instance_name = instance["instance_name"]
-
     output_path = processed_data_dir / f"{instance_name}_instance.json"
 
     with output_path.open("w", encoding="utf-8") as file:
         json.dump(instance, file, indent=2)
 
     print(f"Saved processed instance to: {output_path}")
-
     return output_path
 
 
@@ -382,16 +376,12 @@ def save_processed_graphml(
     instance_name: str,
     config: dict[str, Any],
 ) -> Path:
-    """
-    Save processed subgraph as GraphML.
-    """
     processed_data_dir = ensure_directory(config["outputs"]["processed_data_dir"])
     output_path = processed_data_dir / f"{instance_name}_graph.graphml"
 
     ox.io.save_graphml(graph, filepath=output_path)
 
     print(f"Saved processed GraphML to: {output_path}")
-
     return output_path
 
 
@@ -400,12 +390,8 @@ def plot_processed_graph(
     instance: dict[str, Any],
     config: dict[str, Any],
 ) -> Path:
-    """
-    Save visualization of processed instance.
-    """
     figures_dir = ensure_directory(config["outputs"]["figures_dir"])
     instance_name = instance["instance_name"]
-
     output_path = figures_dir / f"{instance_name}_processed_graph.png"
 
     fig, ax = ox.plot_graph(
@@ -429,7 +415,6 @@ def plot_processed_graph(
     plt.close(fig)
 
     print(f"Saved processed graph visualization to: {output_path}")
-
     return output_path
 
 
@@ -439,9 +424,6 @@ def build_instance(
     max_nodes: int,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Build one processed planning instance.
-    """
     vehicle_speed = float(config["vehicle"]["speed_m_per_s"])
 
     subgraph = create_instance_subgraph(graph, max_nodes=max_nodes)
@@ -463,12 +445,18 @@ def build_instance(
         vehicle_speed_m_per_s=vehicle_speed,
     )
 
+    # Summarise detected features for console output
+    n_signals = sum(1 for loc in locations if loc["has_traffic_signal"])
+    n_chargers = sum(1 for loc in locations if loc["has_charging_station"])
+
     instance = {
         "instance_name": instance_name,
         "place_name": config["map"]["place_name"],
         "network_type": config["map"]["network_type"],
         "num_locations": len(locations),
         "num_edges": len(edges),
+        "num_traffic_signals": n_signals,
+        "num_charging_stations": n_chargers,
         "vehicle": {
             "name": config["vehicle"]["name"],
             "initial_battery": float(config["vehicle"]["initial_battery"]),
@@ -482,8 +470,10 @@ def build_instance(
         "estimated_shortest_distance_m": round(shortest_distance, 3),
         "locations": locations,
         "edges": edges,
+        "blocked_edges": [],
         "node_mapping": {
-            str(original_id): pddl_id for original_id, pddl_id in mapping.items()
+            str(original_id): pddl_id
+            for original_id, pddl_id in mapping.items()
         },
     }
 
@@ -495,21 +485,14 @@ def build_instance(
 
 
 def run_graph_processing(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """
-    Complete Stage Three:
-    - load raw graph
-    - normalize edge lengths
-    - keep largest useful component
-    - generate small, medium, and large instances
-    """
     raw_graph = load_raw_graph(config)
     raw_graph = normalize_edge_lengths(raw_graph)
     graph = keep_largest_strongly_connected_component(raw_graph)
 
     instance_specs = [
-        ("small", int(config["map"]["max_nodes_small"])),
+        ("small",  int(config["map"]["max_nodes_small"])),
         ("medium", int(config["map"]["max_nodes_medium"])),
-        ("large", int(config["map"]["max_nodes_large"])),
+        ("large",  int(config["map"]["max_nodes_large"])),
     ]
 
     instances = []
@@ -528,6 +511,5 @@ def run_graph_processing(config: dict[str, Any]) -> list[dict[str, Any]]:
 
         instances.append(instance)
 
-    print("\nStage Three graph processing completed.")
-
+    print("\nStage Two graph processing completed.")
     return instances

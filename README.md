@@ -1,6 +1,7 @@
 # Overview
 This project is an interactive Automated Planning prototype that converts a user-selected OpenStreetMap area into a PDDL+ urban navigation planning problem. The user selects a map area, chooses the initial and goal states, sets vehicle/resource constraints, runs the ENHSP planner, validates the generated plan, compares it with Dijkstra, visualizes the route on a map, and exports the resulting plan to SUMO for traffic simulation.
-
+## 
+1. streamlit run app\planning_app.py
 ## Usage steps
 1. Open the Streamlit app.
 2. Search for a place.

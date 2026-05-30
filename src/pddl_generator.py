@@ -6,70 +6,48 @@ from typing import Any
 
 
 def ensure_directory(path: str | Path) -> Path:
-    """Create directory if it does not exist."""
     directory = Path(path)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
 def format_number(value: float) -> str:
-    """
-    Format numbers for PDDL.
-
-    Avoid scientific notation because some planners are sensitive to it.
-    """
     formatted = f"{float(value):.6f}"
     formatted = formatted.rstrip("0").rstrip(".")
-
     if formatted == "-0":
         formatted = "0"
-
     return formatted
 
 
 def load_instance(instance_path: str | Path) -> dict[str, Any]:
-    """Load one processed JSON planning instance."""
     path = Path(instance_path)
-
     if not path.exists():
         raise FileNotFoundError(f"Instance file not found: {path}")
-
     with path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
 def load_all_instances(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Load small, medium, and large processed instances."""
     processed_data_dir = Path(config["outputs"]["processed_data_dir"])
-
     instance_files = [
         processed_data_dir / "small_instance.json",
         processed_data_dir / "medium_instance.json",
         processed_data_dir / "large_instance.json",
     ]
-
     instances = []
-
     for instance_file in instance_files:
         if not instance_file.exists():
             raise FileNotFoundError(
                 f"Missing processed instance: {instance_file}\n"
-                "Run Stage Three before Stage Four."
+                "Run Stage Two before Stage Three."
             )
-
         instances.append(load_instance(instance_file))
-
     return instances
 
 
 def generate_pddlplus_domain() -> str:
-    """
-    Generate the generic PDDL+ domain.
-
-    This domain is independent of a specific map.
-    The map-specific data goes into the problem file.
-    """
-    return """(define (domain osm-urban-navigation-pddlplus)
+    return """\
+(define (domain osm-urban-navigation-pddlplus)
 
   (:requirements
     :typing
@@ -86,21 +64,33 @@ def generate_pddlplus_domain() -> str:
 
   (:predicates
     (at ?v - vehicle ?l - location)
-    (blocked ?from ?to - location)
-    (visited ?l - location)
-    (connected ?from ?to - location)
     (moving ?v - vehicle)
-    (moving-to ?v - vehicle ?to - location)
+    (moving-to ?v - vehicle ?l - location)
+    (visited ?v - vehicle ?l - location)
+    (connected ?from ?to - location)
+    (blocked ?from ?to - location)
+    (charging-station ?l - location)
+    (charging ?v - vehicle)
+    (has-signal ?l - location)
+    (signal-red ?l - location)
+    (signal-green ?l - location)
+    (congested ?from ?to - location)
   )
+
   (:functions
     (road-distance ?from ?to - location)
-    (speed ?v - vehicle)
-    (battery ?v - vehicle)
-    (battery-rate ?v - vehicle)
-    (battery-consumption-per-meter ?v - vehicle)
     (remaining-distance ?v - vehicle)
     (total-distance)
     (total-time)
+    (speed ?v - vehicle)
+    (battery ?v - vehicle)
+    (max-battery ?v - vehicle)
+    (battery-rate ?v - vehicle)
+    (battery-consumption-per-meter ?v - vehicle)
+    (charge-rate ?v - vehicle)
+    (signal-timer ?l - location)
+    (red-duration ?l - location)
+    (green-duration ?l - location)
   )
 
   (:action start-move
@@ -111,7 +101,9 @@ def generate_pddlplus_domain() -> str:
         (connected ?from ?to)
         (not (blocked ?from ?to))
         (not (moving ?v))
-        (not (visited ?to))
+        (not (charging ?v))
+        (not (visited ?v ?to))
+        (not (signal-red ?from))
         (>= (battery ?v)
             (* (road-distance ?from ?to)
                (battery-consumption-per-meter ?v)))
@@ -121,11 +113,35 @@ def generate_pddlplus_domain() -> str:
         (not (at ?v ?from))
         (moving ?v)
         (moving-to ?v ?to)
-        (assign (remaining-distance ?v)
-                (road-distance ?from ?to))
-        (increase (total-distance)
-                  (road-distance ?from ?to))
+        (assign (remaining-distance ?v) (road-distance ?from ?to))
+        (increase (total-distance) (road-distance ?from ?to))
       )
+  )
+
+  (:action charge
+    :parameters (?v - vehicle ?l - location)
+    :precondition
+      (and
+        (at ?v ?l)
+        (charging-station ?l)
+        (not (moving ?v))
+        (not (charging ?v))
+        (< (battery ?v) (max-battery ?v))
+      )
+    :effect
+      (charging ?v)
+  )
+
+  (:action stop-charging
+    :parameters (?v - vehicle ?l - location)
+    :precondition
+      (and
+        (at ?v ?l)
+        (charging ?v)
+        (not (moving ?v))
+      )
+    :effect
+      (not (charging ?v))
   )
 
   (:process travelling
@@ -134,13 +150,26 @@ def generate_pddlplus_domain() -> str:
       (moving ?v)
     :effect
       (and
-        (decrease (remaining-distance ?v)
-                  (* #t (speed ?v)))
-        (decrease (battery ?v)
-                  (* #t (battery-rate ?v)))
-        (increase (total-time)
-                  (* #t 1))
+        (decrease (remaining-distance ?v) (* #t (speed ?v)))
+        (decrease (battery ?v) (* #t (battery-rate ?v)))
+        (increase (total-time) (* #t 1))
       )
+  )
+
+  (:process charging-process
+    :parameters (?v - vehicle)
+    :precondition
+      (charging ?v)
+    :effect
+      (increase (battery ?v) (* #t (charge-rate ?v)))
+  )
+
+  (:process signal-cycling
+    :parameters (?l - location)
+    :precondition
+      (has-signal ?l)
+    :effect
+      (decrease (signal-timer ?l) (* #t 1))
   )
 
   (:event arrive
@@ -157,182 +186,374 @@ def generate_pddlplus_domain() -> str:
         (not (moving-to ?v ?to))
         (at ?v ?to)
         (assign (remaining-distance ?v) 0)
-        (visited ?to)
+        (visited ?v ?to)
+      )
+  )
+
+  (:event fully-charged
+    :parameters (?v - vehicle)
+    :precondition
+      (and
+        (charging ?v)
+        (>= (battery ?v) (max-battery ?v))
+      )
+    :effect
+      (and
+        (not (charging ?v))
+        (assign (battery ?v) (max-battery ?v))
+      )
+  )
+
+  (:event signal-switch-to-red
+    :parameters (?l - location)
+    :precondition
+      (and
+        (has-signal ?l)
+        (signal-green ?l)
+        (<= (signal-timer ?l) 0)
+      )
+    :effect
+      (and
+        (not (signal-green ?l))
+        (signal-red ?l)
+        (assign (signal-timer ?l) (red-duration ?l))
+      )
+  )
+
+  (:event signal-switch-to-green
+    :parameters (?l - location)
+    :precondition
+      (and
+        (has-signal ?l)
+        (signal-red ?l)
+        (<= (signal-timer ?l) 0)
+      )
+    :effect
+      (and
+        (not (signal-red ?l))
+        (signal-green ?l)
+        (assign (signal-timer ?l) (green-duration ?l))
       )
   )
 )
 """
 
 
+def generate_road_graph_lines(instance: dict[str, Any]) -> list[str]:
+    congested_pairs: dict[tuple[str, str], float] = {}
+    for ce in instance.get("congested_edges", []):
+        factor = float(ce.get("congestion_factor", 0.3))
+        if factor <= 0:
+            factor = 0.1
+        congested_pairs[(ce["from"], ce["to"])] = factor
+
+    lines = []
+    for edge in instance["edges"]:
+        f = edge["from"]
+        t = edge["to"]
+        real_distance = float(edge["distance_m"])
+        factor = congested_pairs.get((f, t))
+
+        if factor is not None:
+            effective_distance = real_distance / factor
+            lines.append(f"    (connected {f} {t})")
+            lines.append(f"    ; congested: real={real_distance}m factor={factor}")
+            lines.append(f"    (= (road-distance {f} {t}) {format_number(effective_distance)})")
+            lines.append(f"    (congested {f} {t})")
+        else:
+            lines.append(f"    (connected {f} {t})")
+            lines.append(f"    (= (road-distance {f} {t}) {format_number(real_distance)})")
+
+    return lines
+
+
+def generate_vehicle_fluents(
+    vehicle_name: str,
+    initial_battery: float,
+    speed: float,
+    consumption_per_meter: float,
+    max_battery: float,
+    charge_rate: float,
+) -> list[str]:
+    battery_rate = speed * consumption_per_meter
+    return [
+        f"    (= (battery {vehicle_name}) {format_number(initial_battery)})",
+        f"    (= (max-battery {vehicle_name}) {format_number(max_battery)})",
+        f"    (= (speed {vehicle_name}) {format_number(speed)})",
+        f"    (= (battery-consumption-per-meter {vehicle_name}) {format_number(consumption_per_meter)})",
+        f"    (= (battery-rate {vehicle_name}) {format_number(battery_rate)})",
+        f"    (= (charge-rate {vehicle_name}) {format_number(charge_rate)})",
+        f"    (= (remaining-distance {vehicle_name}) 0)",
+    ]
+
+
+def generate_location_feature_lines(instance: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    signal_lines: list[str] = []
+    charger_lines: list[str] = []
+
+    for loc in instance["locations"]:
+        lid = loc["id"]
+
+        if loc.get("has_traffic_signal", False):
+            signal_lines.append(f"    ; traffic signal at {lid} (OSM: {loc.get('osm_highway_tag', '')})")
+            signal_lines.append(f"    (has-signal {lid})")
+            signal_lines.append(f"    (signal-green {lid})")
+            signal_lines.append(f"    (= (signal-timer {lid}) 45)")
+            signal_lines.append(f"    (= (red-duration {lid}) 30)")
+            signal_lines.append(f"    (= (green-duration {lid}) 45)")
+
+        if loc.get("has_charging_station", False):
+            charger_lines.append(f"    ; charging station at {lid} (OSM: {loc.get('osm_amenity_tag', '')})")
+            charger_lines.append(f"    (charging-station {lid})")
+
+    if signal_lines:
+        lines.append("")
+        lines.append("    ; --- traffic signals (OSM highway=traffic_signals) ---")
+        lines.extend(signal_lines)
+
+    if charger_lines:
+        lines.append("")
+        lines.append("    ; --- charging stations (OSM amenity=charging_station) ---")
+        lines.extend(charger_lines)
+
+    return lines
+
+
 def generate_objects_section(instance: dict[str, Any]) -> str:
-    """Generate PDDL objects section."""
     vehicle_name = instance["vehicle"]["name"]
-    location_ids = [location["id"] for location in instance["locations"]]
+    location_ids = [loc["id"] for loc in instance["locations"]]
 
-    location_lines = []
+    location_lines: list[str] = []
     line = "    "
-
-    for location_id in location_ids:
-        candidate = line + location_id + " "
-
+    for lid in location_ids:
+        candidate = line + lid + " "
         if len(candidate) > 78:
             location_lines.append(line.rstrip())
-            line = "    " + location_id + " "
+            line = "    " + lid + " "
         else:
             line = candidate
-
     if line.strip():
         location_lines.append(line.rstrip())
 
-    locations_text = "\n".join(location_lines)
-
-    return f"""  (:objects
-    {vehicle_name} - vehicle
-{locations_text} - location
-  )
-"""
+    return (
+        "  (:objects\n"
+        f"    {vehicle_name} - vehicle\n"
+        + "\n".join(location_lines) + " - location\n"
+        "  )\n"
+    )
 
 
 def generate_init_section(instance: dict[str, Any]) -> str:
-    """Generate PDDL initial state."""
     vehicle = instance["vehicle"]
     vehicle_name = vehicle["name"]
     start_location = instance["start"]
 
     initial_battery = float(vehicle["initial_battery"])
     speed = float(vehicle["speed_m_per_s"])
-    consumption_per_meter = float(vehicle["battery_consumption_per_meter"])
-    battery_rate = speed * consumption_per_meter
+    consumption = float(vehicle["battery_consumption_per_meter"])
+    max_battery = float(vehicle.get("max_battery", initial_battery))
+    charge_rate = float(vehicle.get("charge_rate", 5.0))
 
-    lines = []
-
+    lines: list[str] = []
     lines.append(f"    (at {vehicle_name} {start_location})")
-    lines.append(f"    (visited {start_location})")
+    lines.append(f"    (visited {vehicle_name} {start_location})")
     lines.append("")
-    lines.append(f"    (= (battery {vehicle_name}) {format_number(initial_battery)})")
-    lines.append(f"    (= (speed {vehicle_name}) {format_number(speed)})")
-    lines.append(
-        f"    (= (battery-consumption-per-meter {vehicle_name}) "
-        f"{format_number(consumption_per_meter)})"
-    )
-    lines.append(f"    (= (battery-rate {vehicle_name}) {format_number(battery_rate)})")
-    lines.append(f"    (= (remaining-distance {vehicle_name}) 0)")
-    lines.append(f"    (= (total-distance) 0)")
-    lines.append(f"    (= (total-time) 0)")
-    lines.append("")
-
-    for edge in instance["edges"]:
-        from_location = edge["from"]
-        to_location = edge["to"]
-        distance = float(edge["distance_m"])
-
-        lines.append(f"    (connected {from_location} {to_location})")
-        lines.append(
-            f"    (= (road-distance {from_location} {to_location}) "
-            f"{format_number(distance)})"
+    lines.extend(
+        generate_vehicle_fluents(
+            vehicle_name, initial_battery, speed,
+            consumption, max_battery, charge_rate,
         )
-    
-    blocked_edges = instance.get("blocked_edges", [])
+    )
+    lines.append("    (= (total-distance) 0)")
+    lines.append("    (= (total-time) 0)")
+    lines.append("")
+    lines.extend(generate_road_graph_lines(instance))
+    lines.extend(generate_location_feature_lines(instance))
 
+    blocked_edges = instance.get("blocked_edges", [])
     if blocked_edges:
         lines.append("")
-        lines.append("    ; Blocked road segments")
+        lines.append("    ; --- blocked road segments ---")
+        for be in blocked_edges:
+            lines.append(f"    (blocked {be['from']} {be['to']})")
 
-        for blocked_edge in blocked_edges:
-            from_location = blocked_edge["from"]
-            to_location = blocked_edge["to"]
-            lines.append(f"    (blocked {from_location} {to_location})")
-
-    init_text = "\n".join(lines)
-
-    return f"""  (:init
-{init_text}
-  )
-"""
+    return "  (:init\n" + "\n".join(lines) + "\n  )\n"
 
 
 def generate_goal_section(instance: dict[str, Any]) -> str:
-    """Generate PDDL goal section."""
     vehicle_name = instance["vehicle"]["name"]
     goal_location = instance["goal"]
-
-    return f"""  (:goal
-    (and
-      (at {vehicle_name} {goal_location})
-      (not (moving {vehicle_name}))
+    return (
+        "  (:goal\n"
+        "    (and\n"
+        f"      (at {vehicle_name} {goal_location})\n"
+        f"      (not (moving {vehicle_name}))\n"
+        "    )\n"
+        "  )\n"
     )
-  )
-"""
 
 
-def generate_metric_section(config: dict[str, Any]) -> str:
-    """
-    Generate PDDL metric section.
-
-    Supported metrics:
-    - distance
-    - time
-    """
-    metric = config["planning"].get("metric", "distance").lower()
-
+def generate_metric_section(metric: str = "distance") -> str:
     if metric == "time":
         return "  (:metric minimize (total-time))\n"
-
     return "  (:metric minimize (total-distance))\n"
 
 
 def generate_problem(instance: dict[str, Any], config: dict[str, Any]) -> str:
-    """Generate one PDDL+ problem file."""
     instance_name = instance["instance_name"]
     problem_name = f"osm-navigation-{instance_name}"
+    metric = config["planning"].get("metric", "distance")
 
-    objects = generate_objects_section(instance)
-    init = generate_init_section(instance)
-    goal = generate_goal_section(instance)
-    metric = generate_metric_section(config)
+    return (
+        f"(define (problem {problem_name})\n"
+        "  (:domain osm-urban-navigation-pddlplus)\n\n"
+        + generate_objects_section(instance) + "\n"
+        + generate_init_section(instance) + "\n"
+        + generate_goal_section(instance) + "\n"
+        + generate_metric_section(metric)
+        + ")\n"
+    )
 
-    return f"""(define (problem {problem_name})
-  (:domain osm-urban-navigation-pddlplus)
 
-{objects}
-{init}
-{goal}
-{metric})
-"""
+def generate_multi_vehicle_objects(
+    vehicles: list[dict[str, Any]],
+    instance: dict[str, Any],
+) -> str:
+    vehicle_ids = " ".join(v["id"] for v in vehicles)
+    location_ids = [loc["id"] for loc in instance["locations"]]
+
+    location_lines: list[str] = []
+    line = "    "
+    for lid in location_ids:
+        candidate = line + lid + " "
+        if len(candidate) > 78:
+            location_lines.append(line.rstrip())
+            line = "    " + lid + " "
+        else:
+            line = candidate
+    if line.strip():
+        location_lines.append(line.rstrip())
+
+    return (
+        "  (:objects\n"
+        f"    {vehicle_ids} - vehicle\n"
+        + "\n".join(location_lines) + " - location\n"
+        "  )\n"
+    )
+
+
+def generate_multi_vehicle_init(
+    vehicles: list[dict[str, Any]],
+    instance: dict[str, Any],
+) -> str:
+    lines: list[str] = []
+
+    for v in vehicles:
+        vid = v["id"]
+        battery = float(v.get("battery", 100.0))
+        speed = float(v.get("speed_m_per_s", 10.0))
+        consumption = float(v.get("battery_consumption_per_meter", 0.01))
+        max_battery = float(v.get("max_battery", battery))
+        charge_rate = float(v.get("charge_rate", 5.0))
+
+        lines.append(f"    ; --- {vid} ---")
+        lines.append(f"    (at {vid} {v['start']})")
+        lines.append(f"    (visited {vid} {v['start']})")
+        lines.extend(
+            generate_vehicle_fluents(
+                vid, battery, speed, consumption, max_battery, charge_rate,
+            )
+        )
+        lines.append("")
+
+    lines.append("    (= (total-distance) 0)")
+    lines.append("    (= (total-time) 0)")
+    lines.append("")
+    lines.extend(generate_road_graph_lines(instance))
+    lines.extend(generate_location_feature_lines(instance))
+
+    blocked_edges = instance.get("blocked_edges", [])
+    if blocked_edges:
+        lines.append("")
+        lines.append("    ; --- blocked road segments ---")
+        for be in blocked_edges:
+            lines.append(f"    (blocked {be['from']} {be['to']})")
+
+    return "  (:init\n" + "\n".join(lines) + "\n  )\n"
+
+
+def generate_multi_vehicle_goal(vehicles: list[dict[str, Any]]) -> str:
+    conditions = []
+    for v in vehicles:
+        conditions.append(f"      (at {v['id']} {v['goal']})")
+        conditions.append(f"      (not (moving {v['id']}))")
+    return (
+        "  (:goal\n"
+        "    (and\n"
+        + "\n".join(conditions) + "\n"
+        "    )\n"
+        "  )\n"
+    )
+
+
+def generate_multi_vehicle_problem(
+    vehicles: list[dict[str, Any]],
+    instance: dict[str, Any],
+    metric: str = "distance",
+) -> str:
+    instance_name = instance["instance_name"]
+    n = len(vehicles)
+    problem_name = f"osm-navigation-{instance_name}-{n}vehicles"
+    vehicle_summary = ", ".join(
+        f"{v['id']}: {v['start']}to{v['goal']}" for v in vehicles
+    )
+
+    return (
+        f"(define (problem {problem_name})\n"
+        "  (:domain osm-urban-navigation-pddlplus)\n\n"
+        f"  ; Multi-vehicle planning problem\n"
+        f"  ; Vehicles : {vehicle_summary}\n"
+        f"  ; Instance : {instance_name} "
+        f"({instance['num_locations']} locations, {instance['num_edges']} edges)\n\n"
+        + generate_multi_vehicle_objects(vehicles, instance) + "\n"
+        + generate_multi_vehicle_init(vehicles, instance) + "\n"
+        + generate_multi_vehicle_goal(vehicles) + "\n"
+        + generate_metric_section(metric)
+        + ")\n"
+    )
 
 
 def save_domain(config: dict[str, Any]) -> Path:
-    """Save the PDDL+ domain file."""
     domain_path = Path(config["planning"]["domain_file"])
     ensure_directory(domain_path.parent)
-
-    domain_text = generate_pddlplus_domain()
-
     with domain_path.open("w", encoding="utf-8") as file:
-        file.write(domain_text)
-
+        file.write(generate_pddlplus_domain())
     print(f"Saved PDDL+ domain to: {domain_path}")
-
     return domain_path
 
 
-def save_problem(
+def save_problem(instance: dict[str, Any], config: dict[str, Any]) -> Path:
+    problem_dir = ensure_directory(config["planning"]["problem_dir"])
+    problem_path = problem_dir / f"problem_{instance['instance_name']}.pddl"
+    with problem_path.open("w", encoding="utf-8") as file:
+        file.write(generate_problem(instance, config))
+    print(f"Saved PDDL+ problem to: {problem_path}")
+    return problem_path
+
+
+def save_multi_vehicle_problem(
+    vehicles: list[dict[str, Any]],
     instance: dict[str, Any],
     config: dict[str, Any],
+    metric: str = "distance",
 ) -> Path:
-    """Save one PDDL+ problem file."""
     problem_dir = ensure_directory(config["planning"]["problem_dir"])
-    instance_name = instance["instance_name"]
-
-    problem_path = problem_dir / f"problem_{instance_name}.pddl"
-
-    problem_text = generate_problem(instance, config)
-
+    n = len(vehicles)
+    problem_path = problem_dir / f"problem_{instance['instance_name']}_{n}vehicles.pddl"
     with problem_path.open("w", encoding="utf-8") as file:
-        file.write(problem_text)
-
-    print(f"Saved PDDL+ problem to: {problem_path}")
-
+        file.write(generate_multi_vehicle_problem(vehicles, instance, metric))
+    print(f"Saved multi-vehicle PDDL+ problem to: {problem_path}")
     return problem_path
 
 
@@ -342,27 +563,26 @@ def save_generation_summary(
     problem_paths: list[Path],
     config: dict[str, Any],
 ) -> Path:
-    """Save a JSON summary of generated PDDL files."""
     results_dir = ensure_directory(config["outputs"]["results_dir"])
     output_path = results_dir / "pddl_generation_summary.json"
 
     summary = {
         "domain_file": str(domain_path),
-        "problem_files": [str(path) for path in problem_paths],
+        "problem_files": [str(p) for p in problem_paths],
         "instances": [
             {
-                "instance_name": instance["instance_name"],
-                "place_name": instance["place_name"],
-                "num_locations": instance["num_locations"],
-                "num_edges": instance["num_edges"],
-                "start": instance["start"],
-                "goal": instance["goal"],
-                "estimated_shortest_distance_m": instance[
-                    "estimated_shortest_distance_m"
-                ],
-                "vehicle": instance["vehicle"],
+                "instance_name": inst["instance_name"],
+                "place_name": inst["place_name"],
+                "num_locations": inst["num_locations"],
+                "num_edges": inst["num_edges"],
+                "num_traffic_signals": inst.get("num_traffic_signals", 0),
+                "num_charging_stations": inst.get("num_charging_stations", 0),
+                "start": inst["start"],
+                "goal": inst["goal"],
+                "estimated_shortest_distance_m": inst["estimated_shortest_distance_m"],
+                "vehicle": inst["vehicle"],
             }
-            for instance in instances
+            for inst in instances
         ],
         "metric": config["planning"].get("metric", "distance"),
         "encoding": "PDDL+ with action, process, and event",
@@ -372,40 +592,64 @@ def save_generation_summary(
         json.dump(summary, file, indent=2)
 
     print(f"Saved PDDL generation summary to: {output_path}")
-
     return output_path
 
 
 def run_pddl_generation(config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Complete Stage Four:
-    - load processed JSON instances
-    - generate PDDL+ domain
-    - generate PDDL+ problem files
-    - save generation summary
-    """
     print("Loading processed instances...")
     instances = load_all_instances(config)
 
     print("Generating PDDL+ domain...")
     domain_path = save_domain(config)
 
-    print("Generating PDDL+ problem files...")
-    problem_paths = []
+    print("Generating single-vehicle PDDL+ problem files...")
+    problem_paths: list[Path] = []
+    metric = config["planning"].get("metric", "distance")
 
     for instance in instances:
-        problem_path = save_problem(instance, config)
-        problem_paths.append(problem_path)
+        problem_paths.append(save_problem(instance, config))
+
+    print("Generating multi-vehicle PDDL+ problem files...")
+    for instance in instances:
+        locations = instance["locations"]
+        n = len(locations)
+
+        vehicle_defaults = {
+            "speed_m_per_s": float(instance["vehicle"].get("speed_m_per_s", 10.0)),
+            "battery_consumption_per_meter": float(
+                instance["vehicle"].get("battery_consumption_per_meter", 0.01)
+            ),
+            "max_battery": float(
+                instance["vehicle"].get(
+                    "max_battery",
+                    instance["vehicle"].get("initial_battery", 100.0),
+                )
+            ),
+            "charge_rate": 5.0,
+        }
+
+        vehicles_2 = [
+            {"id": "car1", "start": locations[0]["id"],
+             "goal": locations[n // 2]["id"], "battery": 100.0, **vehicle_defaults},
+            {"id": "car2", "start": locations[0]["id"],
+             "goal": locations[n - 1]["id"], "battery": 100.0, **vehicle_defaults},
+        ]
+
+        if vehicles_2[0]["start"] == vehicles_2[0]["goal"]:
+            vehicles_2[0]["goal"] = locations[min(n // 2 + 1, n - 1)]["id"]
+        if vehicles_2[1]["start"] == vehicles_2[1]["goal"]:
+            vehicles_2[1]["goal"] = locations[max(n - 2, 0)]["id"]
+
+        problem_paths.append(
+            save_multi_vehicle_problem(vehicles_2, instance, config, metric)
+        )
 
     summary_path = save_generation_summary(
-        instances=instances,
-        domain_path=domain_path,
-        problem_paths=problem_paths,
-        config=config,
+        instances, domain_path, problem_paths, config
     )
 
     return {
         "domain_path": str(domain_path),
-        "problem_paths": [str(path) for path in problem_paths],
+        "problem_paths": [str(p) for p in problem_paths],
         "summary_path": str(summary_path),
     }

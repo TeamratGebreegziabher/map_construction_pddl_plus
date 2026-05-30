@@ -26,7 +26,7 @@ sumo:
     medium: 40
     large: 80
 
-  simulation_end_time: 20000
+  simulation_end_time: 20000000
 vehicle:
   name: "car1"
   initial_battery: 100.0

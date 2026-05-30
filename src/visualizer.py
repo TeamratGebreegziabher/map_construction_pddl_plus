@@ -7,6 +7,11 @@ from typing import Any
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
 
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
 def ensure_directory(path: str | Path) -> Path:
     directory = Path(path)
     directory.mkdir(parents=True, exist_ok=True)
@@ -33,12 +38,11 @@ def load_comparisons(config: dict[str, Any]) -> list[dict[str, Any]]:
     return load_json(results_dir / "comparison_results.json")
 
 
-def get_location_coordinates(instance: dict[str, Any]) -> dict[str, tuple[float, float]]:
-    """
-    Return mapping:
-        loc_id -> (lon, lat)
-    """
-    coordinates = {}
+def get_location_coordinates(
+    instance: dict[str, Any],
+) -> dict[str, tuple[float, float]]:
+    """Return mapping: loc_id -> (lon, lat) for matplotlib (x=lon, y=lat)."""
+    coordinates: dict[str, tuple[float, float]] = {}
 
     for location in instance["locations"]:
         coordinates[location["id"]] = (
@@ -49,14 +53,16 @@ def get_location_coordinates(instance: dict[str, Any]) -> dict[str, tuple[float,
     return coordinates
 
 
+# ---------------------------------------------------------------------------
+# Drawing helpers
+# ---------------------------------------------------------------------------
+
 def draw_base_graph(
     ax: Any,
     instance: dict[str, Any],
     coordinates: dict[str, tuple[float, float]],
 ) -> None:
-    """
-    Draw all road edges in the instance.
-    """
+    """Draw all road edges in light gray as the background graph."""
     for edge in instance["edges"]:
         source = edge["from"]
         target = edge["to"]
@@ -77,7 +83,6 @@ def draw_base_graph(
 
     xs = [coord[0] for coord in coordinates.values()]
     ys = [coord[1] for coord in coordinates.values()]
-
     ax.scatter(xs, ys, s=10, color="black", zorder=2)
 
 
@@ -89,10 +94,9 @@ def draw_route(
     label: str,
     linewidth: float,
     linestyle: str = "-",
+    alpha: float = 1.0,
 ) -> None:
-    """
-    Draw one route over the base graph.
-    """
+    """Draw one route over the base graph."""
     first_segment = True
 
     for source, target in zip(route[:-1], route[1:]):
@@ -108,6 +112,7 @@ def draw_route(
             color=color,
             linewidth=linewidth,
             linestyle=linestyle,
+            alpha=alpha,
             zorder=3,
             label=label if first_segment else None,
         )
@@ -115,17 +120,21 @@ def draw_route(
         first_segment = False
 
 
+# ---------------------------------------------------------------------------
+# Route comparison figure
+# ---------------------------------------------------------------------------
+
 def plot_route_comparison(
     instance: dict[str, Any],
     comparison: dict[str, Any],
     config: dict[str, Any],
 ) -> Path:
     """
-    Plot planner route and Dijkstra route on the same graph.
+    Plot the ENHSP planner route and the Dijkstra baseline route
+    side by side on the extracted road graph.
     """
     figures_dir = ensure_directory(config["outputs"]["figures_dir"])
     instance_name = instance["instance_name"]
-
     output_path = figures_dir / f"{instance_name}_route_comparison.png"
 
     coordinates = get_location_coordinates(instance)
@@ -137,6 +146,7 @@ def plot_route_comparison(
     same_route = comparison.get("same_route_as_dijkstra", False)
 
     if same_route:
+        # Routes are identical — draw once with a neutral label.
         draw_route(
             ax=ax,
             route=comparison["planner_route"],
@@ -145,18 +155,19 @@ def plot_route_comparison(
             label="ENHSP = Dijkstra route",
             linewidth=3.0,
             linestyle="-",
+            alpha=1.0,
         )
     else:
+        # Routes differ — draw both so the gap is visible.
         draw_route(
             ax=ax,
             route=comparison["planner_route"],
             coordinates=coordinates,
             color="red",
-            weight=7,
-            opacity=0.75,
             label="ENHSP planner route",
             linewidth=2.5,
             linestyle="-",
+            alpha=0.75,
         )
 
         draw_route(
@@ -164,14 +175,13 @@ def plot_route_comparison(
             route=comparison["dijkstra_route"],
             coordinates=coordinates,
             color="blue",
-            weight=4,
-            opacity=0.95,
-            dash_array="10,8",
             label="Dijkstra shortest route",
             linewidth=3.5,
             linestyle="--",
+            alpha=0.95,
         )
 
+    # Start and goal markers.
     start = instance["start"]
     goal = instance["goal"]
 
@@ -179,39 +189,36 @@ def plot_route_comparison(
         ax.scatter(
             coordinates[start][0],
             coordinates[start][1],
-            s=80,
+            s=120,
             color="green",
             marker="o",
             label="Start",
-            zorder=4,
+            zorder=5,
         )
 
     if goal in coordinates:
         ax.scatter(
             coordinates[goal][0],
             coordinates[goal][1],
-            s=100,
+            s=150,
             color="purple",
             marker="*",
             label="Goal",
-            zorder=4,
+            zorder=5,
         )
 
     ax.set_title(
-        f"{instance_name.capitalize()} instance: planner vs Dijkstra route",
+        f"{instance_name.capitalize()} instance — ENHSP planner vs Dijkstra",
         fontsize=13,
     )
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
-
-    # Force normal coordinate labels, no scientific offset like +3.935e1
     ax.xaxis.set_major_formatter(FormatStrFormatter("%.4f"))
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
-
-    ax.legend()
+    ax.legend(loc="best")
     ax.grid(True, alpha=0.25)
 
-    # This was missing in your function
+    fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -220,7 +227,14 @@ def plot_route_comparison(
     return output_path
 
 
-def plot_runtime_chart(comparisons: list[dict[str, Any]], config: dict[str, Any]) -> Path:
+# ---------------------------------------------------------------------------
+# Summary charts
+# ---------------------------------------------------------------------------
+
+def plot_runtime_chart(
+    comparisons: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> Path:
     figures_dir = ensure_directory(config["outputs"]["figures_dir"])
     output_path = figures_dir / "runtime_chart.png"
 
@@ -228,15 +242,23 @@ def plot_runtime_chart(comparisons: list[dict[str, Any]], config: dict[str, Any]
     runtimes = [float(item["planner_runtime_seconds"]) for item in comparisons]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(names, runtimes)
+    bars = ax.bar(names, runtimes, color=["#4C72B0", "#DD8452", "#55A868"])
     ax.set_title("ENHSP Runtime by Instance Size")
     ax.set_xlabel("Instance")
     ax.set_ylabel("Runtime (seconds)")
     ax.grid(axis="y", alpha=0.3)
 
-    for index, value in enumerate(runtimes):
-        ax.text(index, value, f"{value:.2f}s", ha="center", va="bottom")
+    for bar, value in zip(bars, runtimes):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.01,
+            f"{value:.3f}s",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
 
+    fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -266,12 +288,14 @@ def plot_distance_comparison_chart(
         planner_distances,
         width,
         label="ENHSP planner",
+        color="#4C72B0",
     )
     ax.bar(
         [x + width / 2 for x in x_positions],
         dijkstra_distances,
         width,
         label="Dijkstra",
+        color="#DD8452",
     )
 
     ax.set_title("Route Distance: ENHSP Planner vs Dijkstra")
@@ -282,6 +306,7 @@ def plot_distance_comparison_chart(
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
 
+    fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -311,12 +336,14 @@ def plot_battery_usage_chart(
         planner_battery,
         width,
         label="ENHSP planner",
+        color="#4C72B0",
     )
     ax.bar(
         [x + width / 2 for x in x_positions],
         dijkstra_battery,
         width,
         label="Dijkstra",
+        color="#DD8452",
     )
 
     ax.set_title("Battery Consumption: ENHSP Planner vs Dijkstra")
@@ -327,6 +354,7 @@ def plot_battery_usage_chart(
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
 
+    fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -346,15 +374,23 @@ def plot_distance_gap_chart(
     gaps = [float(item["distance_gap_percent"]) for item in comparisons]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(names, gaps)
-    ax.set_title("Distance Gap Between ENHSP Plan and Dijkstra Baseline")
+    bars = ax.bar(names, gaps, color=["#4C72B0", "#DD8452", "#55A868"])
+    ax.set_title("Distance Gap: ENHSP Plan vs Dijkstra Baseline (%)")
     ax.set_xlabel("Instance")
     ax.set_ylabel("Gap (%)")
     ax.grid(axis="y", alpha=0.3)
 
-    for index, value in enumerate(gaps):
-        ax.text(index, value, f"{value:.2f}%", ha="center", va="bottom")
+    for bar, value in zip(bars, gaps):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.01,
+            f"{value:.3f}%",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
 
+    fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -363,10 +399,18 @@ def plot_distance_gap_chart(
     return output_path
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def run_visualizations(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Generate all static matplotlib figures for all instances.
+    Called from main.py Stage 8 and experiments/run_baseline_analysis.py.
+    """
     comparisons = load_comparisons(config)
 
-    route_figures = []
+    route_figures: list[str] = []
 
     for comparison in comparisons:
         instance_name = comparison["instance_name"]
