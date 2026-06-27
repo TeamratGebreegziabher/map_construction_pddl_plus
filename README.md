@@ -14,7 +14,7 @@ Given a map area, the system:
 4. Visualises the planned routes on an interactive Folium map
 5. Executes the plan in SUMO via TraCI, with plan-faithful departure times, charging stops, and deviation monitoring
 
-Supports 1–5 electric vehicles simultaneously, with per-vehicle start and goal nodes.
+Supports multi-vehicle fleets, with per-vehicle start and goal nodes.
 
 ---
 
