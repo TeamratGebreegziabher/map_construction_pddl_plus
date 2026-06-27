@@ -63,35 +63,54 @@ def generate_pddlplus_domain() -> str:
   )
 
   (:predicates
+    ; vehicle position and motion
     (at ?v - vehicle ?l - location)
     (moving ?v - vehicle)
+    (moving-from ?v - vehicle ?l - location)
     (moving-to ?v - vehicle ?l - location)
     (visited ?v - vehicle ?l - location)
+    ; road graph
     (connected ?from ?to - location)
     (blocked ?from ?to - location)
+    ; charging
     (charging-station ?l - location)
     (charging ?v - vehicle)
+    ; traffic signals — three-phase: green -> yellow -> red -> green
     (has-signal ?l - location)
-    (signal-red ?l - location)
     (signal-green ?l - location)
-    (congested ?from ?to - location)
+    (signal-yellow ?l - location)
+    (signal-red ?l - location)
+    ; coordination
+    (priority ?v - vehicle)
   )
 
   (:functions
+    ; road graph
     (road-distance ?from ?to - location)
+    ; vehicle state
     (remaining-distance ?v - vehicle)
-    (total-distance)
-    (total-time)
     (speed ?v - vehicle)
     (battery ?v - vehicle)
     (max-battery ?v - vehicle)
     (battery-rate ?v - vehicle)
     (battery-consumption-per-meter ?v - vehicle)
     (charge-rate ?v - vehicle)
+    ; charging infrastructure
+    (station-capacity ?l - location)
+    (station-load ?l - location)
+    ; signal timing
     (signal-timer ?l - location)
-    (red-duration ?l - location)
     (green-duration ?l - location)
+    (yellow-duration ?l - location)
+    (red-duration ?l - location)
+    ; global metrics
+    (total-distance)
+    (total-time)
   )
+
+  ; -------------------------------------------------------------------------
+  ; Actions
+  ; -------------------------------------------------------------------------
 
   (:action start-move
     :parameters (?v - vehicle ?from ?to - location)
@@ -103,7 +122,10 @@ def generate_pddlplus_domain() -> str:
         (not (moving ?v))
         (not (charging ?v))
         (not (visited ?v ?to))
-        (not (signal-red ?from))
+        ; traffic signals — priority vehicles bypass red and yellow
+        (or (priority ?v) (not (signal-red ?from)))
+        (or (priority ?v) (not (signal-yellow ?from)))
+        ; battery check: must have enough charge to traverse this edge
         (>= (battery ?v)
             (* (road-distance ?from ?to)
                (battery-consumption-per-meter ?v)))
@@ -112,6 +134,7 @@ def generate_pddlplus_domain() -> str:
       (and
         (not (at ?v ?from))
         (moving ?v)
+        (moving-from ?v ?from)
         (moving-to ?v ?to)
         (assign (remaining-distance ?v) (road-distance ?from ?to))
         (increase (total-distance) (road-distance ?from ?to))
@@ -127,31 +150,37 @@ def generate_pddlplus_domain() -> str:
         (not (moving ?v))
         (not (charging ?v))
         (< (battery ?v) (max-battery ?v))
+        (< (station-load ?l) (station-capacity ?l))
       )
     :effect
-      (charging ?v)
-  )
-
-  (:action stop-charging
-    :parameters (?v - vehicle ?l - location)
-    :precondition
       (and
-        (at ?v ?l)
         (charging ?v)
-        (not (moving ?v))
+        (increase (station-load ?l) 1)
       )
-    :effect
-      (not (charging ?v))
   )
 
+  ; -------------------------------------------------------------------------
+  ; Processes
+  ; -------------------------------------------------------------------------
+
+  ; Travelling — vehicle moves at its configured speed.
+  ; Congested edges are handled at problem generation time by inflating
+  ; road-distance, so the planner naturally avoids or penalises them
+  ; without requiring any extra fluent or formula here.
   (:process travelling
-    :parameters (?v - vehicle)
+    :parameters (?v - vehicle ?from ?to - location)
     :precondition
-      (moving ?v)
+      (and
+        (moving ?v)
+        (moving-from ?v ?from)
+        (moving-to ?v ?to)
+      )
     :effect
       (and
-        (decrease (remaining-distance ?v) (* #t (speed ?v)))
-        (decrease (battery ?v) (* #t (battery-rate ?v)))
+        (decrease (remaining-distance ?v)
+          (* #t (speed ?v)))
+        (decrease (battery ?v)
+          (* #t (battery-rate ?v)))
         (increase (total-time) (* #t 1))
       )
   )
@@ -172,17 +201,23 @@ def generate_pddlplus_domain() -> str:
       (decrease (signal-timer ?l) (* #t 1))
   )
 
+  ; -------------------------------------------------------------------------
+  ; Events
+  ; -------------------------------------------------------------------------
+
   (:event arrive
-    :parameters (?v - vehicle ?to - location)
+    :parameters (?v - vehicle ?from ?to - location)
     :precondition
       (and
         (moving ?v)
+        (moving-from ?v ?from)
         (moving-to ?v ?to)
         (<= (remaining-distance ?v) 0)
       )
     :effect
       (and
         (not (moving ?v))
+        (not (moving-from ?v ?from))
         (not (moving-to ?v ?to))
         (at ?v ?to)
         (assign (remaining-distance ?v) 0)
@@ -191,20 +226,24 @@ def generate_pddlplus_domain() -> str:
   )
 
   (:event fully-charged
-    :parameters (?v - vehicle)
+    :parameters (?v - vehicle ?l - location)
     :precondition
       (and
         (charging ?v)
+        (at ?v ?l)
+        (charging-station ?l)
         (>= (battery ?v) (max-battery ?v))
       )
     :effect
       (and
         (not (charging ?v))
         (assign (battery ?v) (max-battery ?v))
+        (decrease (station-load ?l) 1)
       )
   )
 
-  (:event signal-switch-to-red
+  ; Signal phase: green -> yellow
+  (:event signal-switch-to-yellow
     :parameters (?l - location)
     :precondition
       (and
@@ -215,11 +254,29 @@ def generate_pddlplus_domain() -> str:
     :effect
       (and
         (not (signal-green ?l))
+        (signal-yellow ?l)
+        (assign (signal-timer ?l) (yellow-duration ?l))
+      )
+  )
+
+  ; Signal phase: yellow -> red
+  (:event signal-switch-to-red
+    :parameters (?l - location)
+    :precondition
+      (and
+        (has-signal ?l)
+        (signal-yellow ?l)
+        (<= (signal-timer ?l) 0)
+      )
+    :effect
+      (and
+        (not (signal-yellow ?l))
         (signal-red ?l)
         (assign (signal-timer ?l) (red-duration ?l))
       )
   )
 
+  ; Signal phase: red -> green
   (:event signal-switch-to-green
     :parameters (?l - location)
     :precondition
@@ -231,6 +288,26 @@ def generate_pddlplus_domain() -> str:
     :effect
       (and
         (not (signal-red ?l))
+        (signal-green ?l)
+        (assign (signal-timer ?l) (green-duration ?l))
+      )
+  )
+
+  ; Emergency preemption — a priority vehicle approaching a signalised node
+  ; forces it immediately to green, regardless of current phase.
+  (:event signal-preempt-green
+    :parameters (?v - vehicle ?l - location)
+    :precondition
+      (and
+        (priority ?v)
+        (moving-to ?v ?l)
+        (has-signal ?l)
+        (not (signal-green ?l))
+      )
+    :effect
+      (and
+        (not (signal-red ?l))
+        (not (signal-yellow ?l))
         (signal-green ?l)
         (assign (signal-timer ?l) (green-duration ?l))
       )
@@ -257,9 +334,8 @@ def generate_road_graph_lines(instance: dict[str, Any]) -> list[str]:
         if factor is not None:
             effective_distance = real_distance / factor
             lines.append(f"    (connected {f} {t})")
-            lines.append(f"    ; congested: real={real_distance}m factor={factor}")
+            lines.append(f"    ; congested: real={real_distance}m factor={factor} effective={format_number(effective_distance)}m")
             lines.append(f"    (= (road-distance {f} {t}) {format_number(effective_distance)})")
-            lines.append(f"    (congested {f} {t})")
         else:
             lines.append(f"    (connected {f} {t})")
             lines.append(f"    (= (road-distance {f} {t}) {format_number(real_distance)})")
@@ -292,6 +368,11 @@ def generate_location_feature_lines(instance: dict[str, Any]) -> list[str]:
     signal_lines: list[str] = []
     charger_lines: list[str] = []
 
+    red_dur    = int(instance.get("signal_red_duration",    30))
+    green_dur  = int(instance.get("signal_green_duration",  45))
+    yellow_dur = int(instance.get("signal_yellow_duration",  5))
+    station_cap = int(instance.get("station_capacity",        2))
+
     for loc in instance["locations"]:
         lid = loc["id"]
 
@@ -299,13 +380,16 @@ def generate_location_feature_lines(instance: dict[str, Any]) -> list[str]:
             signal_lines.append(f"    ; traffic signal at {lid} (OSM: {loc.get('osm_highway_tag', '')})")
             signal_lines.append(f"    (has-signal {lid})")
             signal_lines.append(f"    (signal-green {lid})")
-            signal_lines.append(f"    (= (signal-timer {lid}) 45)")
-            signal_lines.append(f"    (= (red-duration {lid}) 30)")
-            signal_lines.append(f"    (= (green-duration {lid}) 45)")
+            signal_lines.append(f"    (= (signal-timer {lid}) {green_dur})")
+            signal_lines.append(f"    (= (green-duration {lid}) {green_dur})")
+            signal_lines.append(f"    (= (yellow-duration {lid}) {yellow_dur})")
+            signal_lines.append(f"    (= (red-duration {lid}) {red_dur})")
 
         if loc.get("has_charging_station", False):
             charger_lines.append(f"    ; charging station at {lid} (OSM: {loc.get('osm_amenity_tag', '')})")
             charger_lines.append(f"    (charging-station {lid})")
+            charger_lines.append(f"    (= (station-capacity {lid}) {station_cap})")
+            charger_lines.append(f"    (= (station-load {lid}) 0)")
 
     if signal_lines:
         lines.append("")
@@ -356,6 +440,7 @@ def generate_init_section(instance: dict[str, Any]) -> str:
     charge_rate = float(vehicle.get("charge_rate", 5.0))
 
     lines: list[str] = []
+
     lines.append(f"    (at {vehicle_name} {start_location})")
     lines.append(f"    (visited {vehicle_name} {start_location})")
     lines.append("")
@@ -370,6 +455,11 @@ def generate_init_section(instance: dict[str, Any]) -> str:
     lines.append("")
     lines.extend(generate_road_graph_lines(instance))
     lines.extend(generate_location_feature_lines(instance))
+
+    if instance.get("vehicle_priority", False):
+        lines.append("")
+        lines.append("    ; priority vehicle")
+        lines.append(f"    (priority {vehicle_name})")
 
     blocked_edges = instance.get("blocked_edges", [])
     if blocked_edges:
@@ -465,6 +555,8 @@ def generate_multi_vehicle_init(
                 vid, battery, speed, consumption, max_battery, charge_rate,
             )
         )
+        if v.get("priority", False):
+            lines.append(f"    (priority {vid})")
         lines.append("")
 
     lines.append("    (= (total-distance) 0)")

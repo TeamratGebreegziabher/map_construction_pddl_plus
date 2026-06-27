@@ -62,10 +62,19 @@ def parse_action_line(line: str) -> dict[str, Any] | None:
 
     elif action_name == "arrive" and len(args) >= 2:
         parsed["vehicle"] = args[0]
-        parsed["to"] = args[1]
+        # ENHSP emits: (arrive <vehicle> <from> <to>) — 3 args
+        if len(args) >= 3:
+            parsed["from"] = args[1]
+            parsed["to"]   = args[2]
+        else:
+            parsed["to"] = args[1]
 
-    elif action_name in ("charge", "stop-charging") and len(args) >= 2:
-        parsed["vehicle"] = args[0]
+    elif action_name == "charge" and len(args) >= 2:
+        parsed["vehicle"]  = args[0]
+        parsed["location"] = args[1]
+
+    elif action_name == "fully-charged" and len(args) >= 2:
+        parsed["vehicle"]  = args[0]
         parsed["location"] = args[1]
 
     return parsed

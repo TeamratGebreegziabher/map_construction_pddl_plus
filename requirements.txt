@@ -9,4 +9,3 @@ folium
 pytest
 streamlit
 streamlit-folium
-shapely

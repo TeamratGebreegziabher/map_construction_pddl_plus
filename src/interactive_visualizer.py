@@ -361,3 +361,104 @@ def run_interactive_visualizations(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "interactive_maps": generated_maps,
     }
+
+# ---------------------------------------------------------------------------
+# Multi-vehicle interactive map
+# ---------------------------------------------------------------------------
+
+# Colours matching the UI palette — indexed by vehicle position
+_MV_COLOURS = ["red", "green", "blue", "orange", "purple"]
+_MV_GOAL_COLOURS = ["darkred", "darkgreen", "darkblue", "cadetblue", "darkpurple"]
+
+
+def create_multi_vehicle_route_map(
+    instance: dict[str, Any],
+    per_vehicle_results: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> Path:
+    """
+    Generate an interactive Folium map showing all vehicle routes.
+
+    Each vehicle gets its own colour (matching the UI palette).
+    Vehicles with no route are skipped.
+    Start and goal markers are shown per vehicle.
+    """
+    maps_dir = ensure_directory(config["outputs"].get("maps_dir", "outputs/maps"))
+    instance_name = instance["instance_name"]
+    output_path = maps_dir / f"{instance_name}_interactive_route_map.html"
+
+    coordinates = get_coordinates(instance)
+    center = get_map_center(coordinates)
+
+    fmap = folium.Map(
+        location=center,
+        zoom_start=15,
+        tiles="OpenStreetMap",
+        control_scale=True,
+    )
+
+    add_base_graph(fmap, instance, coordinates)
+
+    for idx, vr in enumerate(per_vehicle_results):
+        vid = vr["vehicle_id"]
+        route = vr.get("route", [])
+        colour = _MV_COLOURS[idx % len(_MV_COLOURS)]
+        goal_colour = _MV_GOAL_COLOURS[idx % len(_MV_GOAL_COLOURS)]
+
+        if len(route) >= 2:
+            add_route(
+                fmap=fmap,
+                route=route,
+                coordinates=coordinates,
+                instance=instance,
+                route_name=f"{vid} (ENHSP)",
+                color=colour,
+                dashed=False,
+                show=True,
+            )
+
+            # Dijkstra comparison route
+            dijkstra_route = vr.get("dijkstra_route", [])
+            if dijkstra_route and dijkstra_route != route:
+                add_route(
+                    fmap=fmap,
+                    route=dijkstra_route,
+                    coordinates=coordinates,
+                    instance=instance,
+                    route_name=f"{vid} (Dijkstra)",
+                    color=goal_colour,
+                    dashed=True,
+                    show=False,
+                )
+
+        # Start marker
+        v_start = vr.get("start")
+        if v_start and v_start in coordinates:
+            lat, lon = coordinates[v_start]
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=10,
+                color=colour,
+                fill=True,
+                fill_opacity=0.9,
+                tooltip=f"{vid} START: {v_start}",
+                popup=f"<b>{vid} Start</b><br>{v_start}",
+            ).add_to(fmap)
+
+        # Goal marker
+        v_goal = vr.get("goal")
+        if v_goal and v_goal in coordinates:
+            lat, lon = coordinates[v_goal]
+            folium.Marker(
+                location=[lat, lon],
+                tooltip=f"{vid} GOAL: {v_goal}",
+                popup=f"<b>{vid} Goal</b><br>{v_goal}",
+                icon=folium.Icon(color=colour, icon="flag"),
+            ).add_to(fmap)
+
+    folium.LayerControl(collapsed=False).add_to(fmap)
+
+    fmap.save(str(output_path))
+    print(f"Saved multi-vehicle interactive route map: {output_path}")
+
+    return output_path

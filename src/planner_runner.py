@@ -4,6 +4,7 @@ import csv
 import json
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -95,15 +96,23 @@ def build_enhsp_command(
     jar_path = planner_config["jar_path"]
     extra_args = planner_config.get("extra_args", [])
 
+    heap = planner_config.get("java_heap", "1g")
+    search = planner_config.get("search_strategy", "")
+
     command = [
         java_path,
+        f"-Xmx{heap}",
         "-jar",
         jar_path,
         "-o",
         str(domain_file),
         "-f",
         str(problem_file),
+        "-pe",   # print events in plan output
     ]
+
+    if search:
+        command += ["-s", search]
 
     command.extend(extra_args)
 
@@ -135,35 +144,44 @@ def run_single_problem(
 
     start_time = time.perf_counter()
 
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
         runtime_seconds = time.perf_counter() - start_time
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-        full_output = stdout + "\n" + stderr
+        full_output = (stdout or "") + "\n" + (stderr or "")
+        status = "success" if proc.returncode == 0 else "failed"
+        completed = proc
 
-        status = "success" if completed.returncode == 0 else "failed"
-
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         runtime_seconds = time.perf_counter() - start_time
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        # On Windows subprocess.kill() does not kill the JVM process tree;
+        # taskkill /F /T kills all child processes so the pipes close promptly.
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+            )
+        else:
+            proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
 
         if isinstance(stdout, bytes):
             stdout = stdout.decode(errors="replace")
         if isinstance(stderr, bytes):
             stderr = stderr.decode(errors="replace")
 
-        full_output = stdout + "\n" + stderr
+        full_output = (stdout or "") + "\n" + (stderr or "")
         full_output += f"\n\nPlanner timed out after {timeout_seconds} seconds.\n"
-
         status = "timeout"
         completed = None
 

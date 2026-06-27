@@ -2,5 +2,6 @@ data/
 report/
 outputs/
 .venv/
-config.yaml
 *.log
+*.docx
+*.tex

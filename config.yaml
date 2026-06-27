@@ -1,58 +1,60 @@
 project:
-  name: "Automatic Generation of PDDL+ Urban Navigation Problems from OpenStreetMap"
-  version: "0.1"
-
+  name: Automatic Generation of PDDL+ Urban Navigation Problems from OpenStreetMap
+  version: '0.1'
 map:
-  place_name: "Rende, Calabria, Italy"
-  network_type: "drive"
+  place_name: Rende, Calabria, Italy
+  network_type: drive
   simplify: true
   retain_all: false
   truncate_by_edge: true
   max_nodes_small: 20
   max_nodes_medium: 50
   max_nodes_large: 100
-
 sumo:
-  netconvert_path: "C:/Program Files (x86)/Eclipse/Sumo/bin/netconvert.exe"
-  sumo_path: "C:/Program Files (x86)/Eclipse/Sumo/bin/sumo.exe"
-  sumo_gui_path: "C:/Program Files (x86)/Eclipse/Sumo/bin/sumo-gui.exe"
-
+  netconvert_path: C:/Program Files (x86)/Eclipse/Sumo/bin/netconvert.exe
+  sumo_path: C:/Program Files (x86)/Eclipse/Sumo/bin/sumo.exe
+  sumo_gui_path: C:/Program Files (x86)/Eclipse/Sumo/bin/sumo-gui.exe
   default_speed_m_per_s: 10.0
-  num_lanes: 1
-
+  num_lanes: 2
   add_background_traffic: true
   background_vehicles:
     small: 15
     medium: 40
     large: 80
-
   simulation_end_time: 20000000
 vehicle:
-  name: "car1"
+  name: car1
   initial_battery: 100.0
   speed_m_per_s: 10.0
   battery_consumption_per_meter: 0.01
-
+  charge_rate: 5.0
+  max_battery: 100.0
 planning:
-  domain_file: "pddl/domain.pddl"
-  problem_dir: "pddl/problems"
-  metric: "distance"
+  domain_file: pddl/domain.pddl
+  problem_dir: pddl/problems
+  metric: distance
   use_battery_constraint: true
   use_pddl_plus: true
-
+  signal_green_duration: 45
+  signal_yellow_duration: 5
+  signal_red_duration: 30
+  station_capacity: 2
+  congestion_sensitivity: 0.1
+  min_chargers: 2
 planner:
-  name: "ENHSP"
-  java_path: "java"
-  jar_path: "planners/enhsp.jar"
+  name: ENHSP
+  java_path: java
+  jar_path: planners/enhsp.jar
   timeout_seconds: 120
+  java_heap: 1g          # JVM max heap for ENHSP (e.g. 512m, 1g, 2g)
+  search_strategy: "gbfs"  # gbfs: fast, finds a valid plan quickly (not optimal); set to "" or "WAStar" for optimal planning
   extra_args: []
-
 outputs:
-  raw_data_dir: "data/raw"
-  processed_data_dir: "data/processed"
-  plans_dir: "outputs/plans"
-  logs_dir: "outputs/logs"
-  figures_dir: "outputs/figures"
-  results_dir: "outputs/results"
-  maps_dir: "outputs/maps"
-  sumo_dir: "outputs/sumo"
+  raw_data_dir: data/raw
+  processed_data_dir: data/processed
+  plans_dir: outputs/plans
+  logs_dir: outputs/logs
+  figures_dir: outputs/figures
+  results_dir: outputs/results
+  maps_dir: outputs/maps
+  sumo_dir: outputs/sumo

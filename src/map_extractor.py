@@ -53,6 +53,11 @@ def extract_graph_from_osm(config: dict[str, Any]) -> nx.MultiDiGraph:
 
     ox.settings.use_cache = True
     ox.settings.log_console = True
+    # Preserve traffic_signals tag on intersection nodes.
+    # OSMnx discards most node tags by default; we must explicitly request these.
+    ox.settings.useful_tags_node = list(set(
+        ox.settings.useful_tags_node + ["highway", "traffic_signals", "crossing"]
+    ))
 
     graph = ox.graph_from_place(
         place_name,

@@ -1,12 +1,12 @@
-(define (problem osm-navigation-custom_multivehicle-2vehicles)
+(define (problem osm-navigation-custom_multivehicle-3vehicles)
   (:domain osm-urban-navigation-pddlplus)
 
   ; Multi-vehicle planning problem
-  ; Vehicles : car1: loc_14toloc_41, car3: loc_6toloc_18
+  ; Vehicles : car1: loc_14toloc_41, car2: loc_32toloc_21, car3: loc_6toloc_18
   ; Instance : custom_multivehicle (50 locations, 81 edges)
 
   (:objects
-    car1 car3 - vehicle
+    car1 car2 car3 - vehicle
     loc_0 loc_1 loc_2 loc_3 loc_4 loc_5 loc_6 loc_7 loc_8 loc_9 loc_10 loc_11
     loc_12 loc_13 loc_14 loc_15 loc_16 loc_17 loc_18 loc_19 loc_20 loc_21
     loc_22 loc_23 loc_24 loc_25 loc_26 loc_27 loc_28 loc_29 loc_30 loc_31
@@ -25,6 +25,18 @@
     (= (battery-rate car1) 0.1)
     (= (charge-rate car1) 5)
     (= (remaining-distance car1) 0)
+
+    ; --- car2 ---
+    (at car2 loc_32)
+    (visited car2 loc_32)
+    (= (battery car2) 100)
+    (= (max-battery car2) 100)
+    (= (speed car2) 10)
+    (= (battery-consumption-per-meter car2) 0.01)
+    (= (battery-rate car2) 0.1)
+    (= (charge-rate car2) 5)
+    (= (remaining-distance car2) 0)
+    (priority car2)
 
     ; --- car3 ---
     (at car3 loc_6)
@@ -336,6 +348,8 @@
     (and
       (at car1 loc_41)
       (not (moving car1))
+      (at car2 loc_21)
+      (not (moving car2))
       (at car3 loc_18)
       (not (moving car3))
     )

@@ -125,10 +125,53 @@ def evaluate_plan(
 
         current_location = to_location
 
-    battery_used = total_distance * consumption_per_meter
-    final_battery = initial_battery - battery_used
+    # Simulate battery level through the complete action sequence.
+    #
+    # Why not use (initial_battery - total_distance * consumption)?
+    # That formula is correct ONLY when no charging occurs. When the plan
+    # includes charge actions, battery is replenished at each stop. We must
+    # simulate step-by-step: drain on start-move legs, restore on charge.
+    #
+    # The PDDL+ fully-charged event fires when battery >= max-battery,
+    # capping the battery at max-battery. We approximate this as an
+    # instantaneous full charge, which is what the planner also assumes
+    # when computing the remaining route from the charging station.
 
-    if final_battery < -1e-6:
+    max_battery = float(vehicle.get("max_battery", initial_battery))
+
+    charge_actions = parsed_plan.get("charge_actions", [])
+    charge_locations = [a.get("location") for a in charge_actions]
+
+    battery_sim = initial_battery
+
+    # Sort all actions by timestamp so the simulation follows plan order
+    all_actions = sorted(
+        parsed_plan.get("actions", []),
+        key=lambda a: (a.get("time") or 0.0),
+    )
+
+    for action in all_actions:
+        act = action["action"]
+        if act == "start-move":
+            from_loc = action.get("from")
+            to_loc   = action.get("to")
+            if (from_loc, to_loc) in edge_lookup:
+                edge_dist   = float(edge_lookup[(from_loc, to_loc)]["distance_m"])
+                battery_sim -= edge_dist * consumption_per_meter
+                if battery_sim < -1e-6:
+                    errors.append(
+                        f"Battery negative ({battery_sim:.3f}) after "
+                        f"moving {from_loc} -> {to_loc}. "
+                        "Plan requires more battery than available at that point."
+                    )
+        elif act == "charge":
+            # Charging restores battery to max (fully-charged event)
+            battery_sim = max_battery
+
+    battery_used  = round(total_distance * consumption_per_meter, 3)
+    final_battery = round(battery_sim, 3)
+
+    if not charge_actions and final_battery < -1e-6:
         errors.append(
             f"Battery becomes negative: final_battery={final_battery:.3f}."
         )
