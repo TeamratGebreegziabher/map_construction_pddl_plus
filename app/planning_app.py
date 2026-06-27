@@ -29,7 +29,6 @@ from app_pipeline import (
     prepare_custom_map_from_polygon,
     run_custom_planning_job,
     run_multi_vehicle_planning_job,
-    generate_custom_sumo_simulation,
 )
 from sumo_traci_runner import run_sumo_traci_simulation
 
@@ -971,206 +970,29 @@ def main() -> None:
                 st.divider()
                 st.subheader("🚗 SUMO Traffic Simulation")
 
-                sumo_col1, sumo_col2 = st.columns([2, 1])
-                with sumo_col1:
-                    if is_multi:
-                        n_v = result.get("num_vehicles", 1)
-                        legend = "  ".join(f"{_vi(i)} car{i+1}" for i in range(n_v))
-                        st.caption(f"Planned vehicles: {legend}  ·  🔵 Background traffic")
-                    else:
-                        st.caption("🔴 Planned vehicle (ENHSP route)  ·  🔵 Background traffic")
-                with sumo_col2:
-                    bg = st.number_input("Background vehicles", 0, 300, 50, 10, key="sumo_bg")
+                if is_multi:
+                    n_v = result.get("num_vehicles", 1)
+                    legend = "  ".join(f"{_vi(i)} car{i+1}" for i in range(n_v))
+                    st.caption(f"Planned vehicles: {legend}  ·  🔵 Background traffic")
+                else:
+                    st.caption("🔴 Planned vehicle (ENHSP route)  ·  🔵 Background traffic")
 
-                if st.button("▶ Generate & Run SUMO Simulation", type="primary",
-                             use_container_width=True, key="sumo_gen"):
-                    with st.spinner("Building network · Running simulation · Parsing results..."):
-                        try:
-                            sumo_cmp = (
-                                {"per_vehicle_results": result["per_vehicle_results"]}
-                                if is_multi else result["comparison"]
+                if st.button("▶ Open SUMO-GUI", type="primary",
+                             use_container_width=True, key="sumo_open"):
+                    try:
+                        with st.spinner("SUMO-GUI running — close the window to see the execution report..."):
+                            traci_report = run_sumo_traci_simulation(
+                                result=result,
+                                instance=result["instance"],
+                                config=config,
+                                gui=True,
                             )
-                            sr = generate_custom_sumo_simulation(
-                                instance=result["instance"], comparison=sumo_cmp,
-                                config=config, background_vehicle_count=int(bg),
-                            )
-                            st.session_state.custom_sumo_result = sr
-                            if sr["success"]:
-                                st.success("Simulation complete.")
-                            else:
-                                st.warning("Files generated but SUMO headless run reported an error. "
-                                           "Check the log below. SUMO-GUI may still work.")
-                        except Exception as exc:
-                            st.error(f"SUMO generation failed: {exc}")
-
-                sr = st.session_state.custom_sumo_result
-                if sr:
-                    import plotly.graph_objects as go
-                    import pandas as pd
-
-                    # ---- In-browser network visualisation (Plotly) ----
-                    st.subheader("Network & Route Visualisation")
-                    inst_data  = result["instance"]
-                    coords     = {l["id"]: (float(l["lat"]), float(l["lon"]))
-                                  for l in inst_data["locations"]}
-
-                    fig = go.Figure()
-
-                    # Edges — grey lines
-                    for edge in inst_data["edges"]:
-                        s, t = edge["from"], edge["to"]
-                        if s in coords and t in coords:
-                            fig.add_trace(go.Scattermapbox(
-                                lat=[coords[s][0], coords[t][0]],
-                                lon=[coords[s][1], coords[t][1]],
-                                mode="lines",
-                                line=dict(width=1.5, color="#aaaaaa"),
-                                hoverinfo="skip", showlegend=False,
-                            ))
-
-                    # Planned routes — coloured thick lines
-                    route_palette = ["#e74c3c","#27ae60","#2980b9","#e67e22","#8e44ad"]
-                    pvr = result.get("per_vehicle_results") or []
-                    if pvr:
-                        for idx, vr in enumerate(pvr):
-                            route = vr.get("route", [])
-                            if len(route) < 2:
-                                continue
-                            rlats = [coords[n][0] for n in route if n in coords]
-                            rlons = [coords[n][1] for n in route if n in coords]
-                            colour = route_palette[idx % len(route_palette)]
-                            fig.add_trace(go.Scattermapbox(
-                                lat=rlats, lon=rlons, mode="lines",
-                                line=dict(width=4, color=colour),
-                                name=f"car{idx+1} route", showlegend=True,
-                            ))
-                    else:
-                        route = result.get("comparison", {}).get("planner_route", [])
-                        if len(route) >= 2:
-                            rlats = [coords[n][0] for n in route if n in coords]
-                            rlons = [coords[n][1] for n in route if n in coords]
-                            fig.add_trace(go.Scattermapbox(
-                                lat=rlats, lon=rlons, mode="lines",
-                                line=dict(width=5, color="#e74c3c"),
-                                name="Planned route", showlegend=True,
-                            ))
-
-                    # Nodes — colour coded
-                    for loc in inst_data["locations"]:
-                        lid  = loc["id"]
-                        lat, lon = float(loc["lat"]), float(loc["lon"])
-                        if loc.get("has_charging_station"):
-                            color, symbol, label = "#16a085", "square", f"⚡ {lid}"
-                        elif loc.get("has_traffic_signal"):
-                            color, symbol, label = "#e67e22", "circle", f"🚦 {lid}"
-                        else:
-                            color, symbol, label = "#7f8c8d", "circle", lid
-                        fig.add_trace(go.Scattermapbox(
-                            lat=[lat], lon=[lon], mode="markers",
-                            marker=dict(size=10, color=color, symbol=symbol),
-                            text=label, hoverinfo="text",
-                            showlegend=False,
-                        ))
-
-                    center_lat = sum(c[0] for c in coords.values()) / len(coords)
-                    center_lon = sum(c[1] for c in coords.values()) / len(coords)
-                    fig.update_layout(
-                        mapbox=dict(
-                            style="open-street-map",
-                            center=dict(lat=center_lat, lon=center_lon),
-                            zoom=14,
-                        ),
-                        margin=dict(l=0, r=0, t=0, b=0),
-                        height=480,
-                        legend=dict(
-                            orientation="h", yanchor="bottom", y=1.01,
-                            xanchor="left", x=0,
-                            bgcolor="rgba(255,255,255,0.8)",
-                        ),
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    # ---- Simulation statistics from tripinfo.xml ----
-                    tripinfo = sr.get("tripinfo", [])
-                    if tripinfo:
-                        st.subheader("Simulation Statistics")
-                        planned    = [t for t in tripinfo if t["id"].startswith("ENHSP_")]
-                        background = [t for t in tripinfo if t["id"].startswith("background_")]
-
-                        if planned:
-                            st.markdown("**Planned vehicles**")
-                            pcols = st.columns(min(len(planned), 5))
-                            for i, t in enumerate(planned):
-                                pcols[i % 5].metric(
-                                    t["id"].replace("ENHSP_", ""),
-                                    f"{t['duration_s']:.0f} s",
-                                    f"{t['route_length_m']:.0f} m route",
-                                )
-                            planned_df = pd.DataFrame([{
-                                "Vehicle":       t["id"].replace("ENHSP_", ""),
-                                "Duration (s)":  round(t["duration_s"], 1),
-                                "Route (m)":     round(t["route_length_m"], 1),
-                                "Waiting (s)":   round(t["waiting_s"], 1),
-                                "Time loss (s)": round(t["time_loss_s"], 1),
-                                "Stops":         t["stops"],
-                            } for t in planned])
-                            st.dataframe(planned_df, use_container_width=True, hide_index=True)
-
-                            # Bar chart — duration vs waiting vs time loss
-                            bar_fig = go.Figure()
-                            vids = [t["id"].replace("ENHSP_", "") for t in planned]
-                            bar_fig.add_bar(name="Travel (s)",   x=vids,
-                                            y=[t["duration_s"] - t["waiting_s"] - t["time_loss_s"]
-                                               for t in planned], marker_color="#27ae60")
-                            bar_fig.add_bar(name="Waiting (s)",  x=vids,
-                                            y=[t["waiting_s"]   for t in planned], marker_color="#e67e22")
-                            bar_fig.add_bar(name="Time loss (s)",x=vids,
-                                            y=[t["time_loss_s"] for t in planned], marker_color="#e74c3c")
-                            bar_fig.update_layout(
-                                barmode="stack", height=280,
-                                title="Time breakdown per planned vehicle",
-                                xaxis_title="Vehicle", yaxis_title="Seconds",
-                                margin=dict(l=0, r=0, t=40, b=0),
-                                legend=dict(orientation="h", y=1.15),
-                            )
-                            st.plotly_chart(bar_fig, use_container_width=True)
-
-                        if background:
-                            avg_dur   = sum(t["duration_s"]    for t in background) / len(background)
-                            avg_wait  = sum(t["waiting_s"]     for t in background) / len(background)
-                            avg_loss  = sum(t["time_loss_s"]   for t in background) / len(background)
-                            completed = sum(1 for t in background if t["arrival_s"] > 0)
-                            st.markdown("**Background traffic**")
-                            bc1, bc2, bc3, bc4 = st.columns(4)
-                            bc1.metric("Completed",   f"{completed}/{len(background)}")
-                            bc2.metric("Avg duration", f"{avg_dur:.0f} s")
-                            bc3.metric("Avg waiting",  f"{avg_wait:.0f} s")
-                            bc4.metric("Avg time loss",f"{avg_loss:.0f} s")
-                    elif sr["success"]:
-                        st.info("Tripinfo not yet available — click Generate again after SUMO installs.")
-
-                    # ---- Open in SUMO-GUI ----
-                    st.divider()
-                    gui_col1, gui_col2 = st.columns([3, 1])
-                    with gui_col1:
-                        st.caption(f"Output folder: `{sr.get('output_dir', '')}`")
-                    with gui_col2:
-                        if st.button("Open SUMO-GUI", use_container_width=True, key="sumo_open"):
-                            try:
-                                # open_sumo(config["sumo"]["sumo_gui_path"], sr["config_file"])
-                                with st.spinner("SUMO-GUI running — close the window to see the execution report..."):
-                                    traci_report = run_sumo_traci_simulation(
-                                        result=result,
-                                        instance=result["instance"],
-                                        config=config,
-                                        gui=True,
-                                    )
-                                st.session_state.custom_traci_report = traci_report
-                                st.success("SUMO-GUI closed. Execution report ready.")
-                            except FileNotFoundError:
-                                st.error("SUMO-GUI not found. Check sumo_gui_path in config.yaml.")
-                            except Exception as exc:
-                                st.error(str(exc))
+                        st.session_state.custom_traci_report = traci_report
+                        st.success("SUMO-GUI closed. Execution report ready.")
+                    except FileNotFoundError:
+                        st.error("SUMO-GUI not found. Check sumo_gui_path in config.yaml.")
+                    except Exception as exc:
+                        st.error(str(exc))
 
                     traci_report = st.session_state.get("custom_traci_report")
                     if traci_report:

@@ -146,7 +146,7 @@ def _planned_edges(timeline: dict) -> set[str]:
 # ── Route file patcher ────────────────────────────────────────────────────────
 
 def _patch_depart_times(route_file: Path, timelines: dict[str, dict]) -> None:
-    """Rewrite depart= for ENHSP_<vehicle_id> entries using plan timing."""
+    """Rewrite depart= for ENHSP_<vehicle_id> entries using plan timing, then re-sort."""
     tree = ET.parse(route_file)
     root = tree.getroot()
     for v_elem in root.findall("vehicle"):
@@ -156,6 +156,17 @@ def _patch_depart_times(route_file: Path, timelines: dict[str, dict]) -> None:
         vid = vid_attr[len("ENHSP_"):]
         if vid in timelines:
             v_elem.set("depart", str(timelines[vid]["depart_time"]))
+
+    # SUMO requires vehicle elements to be in ascending depart order.
+    vtypes   = [e for e in root if e.tag == "vType"]
+    vehicles = [e for e in root if e.tag == "vehicle"]
+    for child in list(root):
+        root.remove(child)
+    for e in vtypes:
+        root.append(e)
+    for e in sorted(vehicles, key=lambda x: float(x.get("depart", 0))):
+        root.append(e)
+
     ET.indent(tree, space="  ")
     tree.write(str(route_file), encoding="utf-8", xml_declaration=True)
 
