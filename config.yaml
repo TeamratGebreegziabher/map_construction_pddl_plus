@@ -45,7 +45,7 @@ planner:
   name: ENHSP
   java_path: java
   jar_path: planners/enhsp.jar
-  timeout_seconds: 120
+  timeout_seconds: 800
   java_heap: 1g          # JVM max heap for ENHSP (e.g. 512m, 1g, 2g)
   search_strategy: "gbfs"  # gbfs: fast, finds a valid plan quickly (not optimal); set to "" or "WAStar" for optimal planning
   extra_args: []

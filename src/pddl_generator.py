@@ -142,14 +142,17 @@ def generate_pddlplus_domain() -> str:
   )
 
   (:action charge
-    :parameters (?v - vehicle ?l - location)
+    :parameters (?v - vehicle ?l - location ?to - location)
     :precondition
       (and
         (at ?v ?l)
         (charging-station ?l)
         (not (moving ?v))
         (not (charging ?v))
-        (< (battery ?v) (max-battery ?v))
+        (connected ?l ?to)
+        (< (battery ?v)
+           (* (road-distance ?l ?to)
+              (battery-consumption-per-meter ?v)))
         (< (station-load ?l) (station-capacity ?l))
       )
     :effect

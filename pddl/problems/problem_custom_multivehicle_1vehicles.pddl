@@ -2,11 +2,11 @@
   (:domain osm-urban-navigation-pddlplus)
 
   ; Multi-vehicle planning problem
-  ; Vehicles : vehicle_3: loc_4toloc_24
+  ; Vehicles : car3: loc_0toloc_37
   ; Instance : custom_multivehicle (50 locations, 99 edges)
 
   (:objects
-    vehicle_3 - vehicle
+    car3 - vehicle
     loc_0 loc_1 loc_2 loc_3 loc_4 loc_5 loc_6 loc_7 loc_8 loc_9 loc_10 loc_11
     loc_12 loc_13 loc_14 loc_15 loc_16 loc_17 loc_18 loc_19 loc_20 loc_21
     loc_22 loc_23 loc_24 loc_25 loc_26 loc_27 loc_28 loc_29 loc_30 loc_31
@@ -15,16 +15,17 @@
   )
 
   (:init
-    ; --- vehicle_3 ---
-    (at vehicle_3 loc_4)
-    (visited vehicle_3 loc_4)
-    (= (battery vehicle_3) 100)
-    (= (max-battery vehicle_3) 100)
-    (= (speed vehicle_3) 10)
-    (= (battery-consumption-per-meter vehicle_3) 0.01)
-    (= (battery-rate vehicle_3) 0.1)
-    (= (charge-rate vehicle_3) 5)
-    (= (remaining-distance vehicle_3) 0)
+    ; --- car3 ---
+    (at car3 loc_0)
+    (visited car3 loc_0)
+    (= (battery car3) 100)
+    (= (max-battery car3) 100)
+    (= (speed car3) 10)
+    (= (battery-consumption-per-meter car3) 0.01)
+    (= (battery-rate car3) 0.1)
+    (= (charge-rate car3) 5)
+    (= (remaining-distance car3) 0)
+    (priority car3)
 
     (= (total-distance) 0)
     (= (total-time) 0)
@@ -34,8 +35,7 @@
     (connected loc_1 loc_35)
     (= (road-distance loc_1 loc_35) 84.021)
     (connected loc_1 loc_49)
-    ; congested: real=26.827m factor=0.4 effective=67.0675m
-    (= (road-distance loc_1 loc_49) 67.0675)
+    (= (road-distance loc_1 loc_49) 26.827)
     (connected loc_1 loc_14)
     (= (road-distance loc_1 loc_14) 87.675)
     (connected loc_2 loc_4)
@@ -239,21 +239,25 @@
     (= (red-duration loc_36) 30)
 
     ; --- charging stations (OSM amenity=charging_station) ---
+    ; charging station at loc_18 (OSM: charging_station)
+    (charging-station loc_18)
+    (= (station-capacity loc_18) 2)
+    (= (station-load loc_18) 0)
     ; charging station at loc_20 (OSM: charging_station)
     (charging-station loc_20)
     (= (station-capacity loc_20) 2)
     (= (station-load loc_20) 0)
 
     ; --- blocked road segments ---
-    (blocked loc_1 loc_35)
+    (blocked loc_46 loc_15)
   )
 
   (:goal
     (and
-      (at vehicle_3 loc_24)
-      (not (moving vehicle_3))
+      (at car3 loc_37)
+      (not (moving car3))
     )
   )
 
-  (:metric minimize (total-time))
+  (:metric minimize (total-distance))
 )
