@@ -1226,7 +1226,7 @@ def generate_background_routes_for_sumo(
 _VEHICLE_SUMO_COLOURS = [
     "255,0,0",    # car1 — red
     "0,200,0",    # car2 — green
-    "247 ,87,159",  # car3 — blue
+    "247,87,159",   # car3 — pink
     "255,165,0",  # car4 — orange
     "160,32,240", # car5 — purple
 ]

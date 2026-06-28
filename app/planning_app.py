@@ -542,6 +542,7 @@ def main() -> None:
         "selected_goal": None, "last_clicked_node": None,
         "custom_sumo_result": None,
         "custom_traci_report": None,
+        "sumo_running": False,
     }.items():
         if key not in st.session_state:
             st.session_state[key] = val
@@ -979,20 +980,24 @@ def main() -> None:
 
                 if st.button("▶ Open SUMO-GUI", type="primary",
                              use_container_width=True, key="sumo_open"):
-                    try:
-                        with st.spinner("SUMO-GUI running — close the window to see the execution report..."):
-                            traci_report = run_sumo_traci_simulation(
-                                result=result,
-                                instance=result["instance"],
-                                config=config,
-                                gui=True,
-                            )
-                        st.session_state.custom_traci_report = traci_report
-                        st.success("SUMO-GUI closed. Execution report ready.")
-                    except FileNotFoundError:
-                        st.error("SUMO-GUI not found. Check sumo_gui_path in config.yaml.")
-                    except Exception as exc:
-                        st.error(str(exc))
+                    if not st.session_state.sumo_running:
+                        st.session_state.sumo_running = True
+                        try:
+                            with st.spinner("SUMO-GUI running — close the window to see the execution report..."):
+                                traci_report = run_sumo_traci_simulation(
+                                    result=result,
+                                    instance=result["instance"],
+                                    config=config,
+                                    gui=True,
+                                )
+                            st.session_state.custom_traci_report = traci_report
+                            st.success("SUMO-GUI closed. Execution report ready.")
+                        except FileNotFoundError:
+                            st.error("SUMO-GUI not found. Check sumo_gui_path in config.yaml.")
+                        except Exception as exc:
+                            st.error(str(exc))
+                        finally:
+                            st.session_state.sumo_running = False
 
                     traci_report = st.session_state.get("custom_traci_report")
                     if traci_report:
@@ -1024,17 +1029,6 @@ def main() -> None:
                             else:
                                 st.warning(f"Total off-route deviations: {total}")
 
-                    with st.expander("Output files"):
-                        st.code(
-                            f"Network  : {sr['network_file']}\n"
-                            f"Routes   : {sr['route_file']}\n"
-                            f"Tripinfo : {sr.get('tripinfo_file', 'N/A')}\n"
-                            f"Edgedata : {sr.get('edgedata_file', 'N/A')}\n"
-                            f"Config   : {sr['config_file']}\n"
-                            f"SUMO log : {sr['sumo_validation_log']}\n"
-                            f"netconv  : {sr['netconvert_log']}",
-                            language="text"
-                        )
 
     # ================================================================
     # Tab 4 — Files (PDDL+ domain, problem, plan, log)

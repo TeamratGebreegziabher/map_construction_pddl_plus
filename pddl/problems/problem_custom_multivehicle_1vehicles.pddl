@@ -25,7 +25,6 @@
     (= (battery-rate car3) 0.1)
     (= (charge-rate car3) 5)
     (= (remaining-distance car3) 0)
-    (priority car3)
 
     (= (total-distance) 0)
     (= (total-time) 0)
@@ -247,9 +246,6 @@
     (charging-station loc_20)
     (= (station-capacity loc_20) 2)
     (= (station-load loc_20) 0)
-
-    ; --- blocked road segments ---
-    (blocked loc_46 loc_15)
   )
 
   (:goal

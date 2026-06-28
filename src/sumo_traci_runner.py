@@ -236,6 +236,8 @@ def run_sumo_traci_simulation(
     _patch_depart_times(route_file, timelines)
 
     # 4. Launch SUMO via traci
+    import time as _time
+    conn_label = f"sumo_{int(_time.time())}"
     sumo_bin = "sumo-gui" if gui else "sumo"
     sumocfg  = sumo_result["config_file"]
     delay    = "100" if gui else "0"
@@ -243,13 +245,12 @@ def run_sumo_traci_simulation(
 
     cmd = [sumo_bin, "-c", sumocfg, "--delay", delay]
     if not gui:
-        cmd += ["--quit-on-end", "true"]  # headless only — GUI stays open after sim ends
+        cmd += ["--quit-on-end", "true"]
     else:
-        # Extend simulation end to cover the latest vehicle goal time + 5 min buffer
-        # so all vehicles depart and arrive before SUMO auto-closes the GUI
         max_goal_t = max((tl["goal_time"] for tl in timelines.values()), default=3600)
         cmd += ["--end", str(int(max_goal_t) + 300)]
-    traci.start(cmd)
+    traci.start(cmd, label=conn_label)
+    traci.switch(conn_label)
 
     # 5. Step-by-step simulation loop
     charge_injected:  set[str]        = set()
@@ -360,7 +361,7 @@ def run_sumo_traci_simulation(
         print(f"  traci error during simulation: {e}")
     finally:
         try:
-            traci.close()
+            traci.close(conn_label)
         except Exception:
             pass
 
